@@ -26,7 +26,7 @@ if __name__ == "__main__":
     parser.add_argument("-pp", "--print-progress", action='store_true', help="Print generalized suffix tree parsing process.")
     parser.add_argument("-pre", "--preprocess", action='store_true', help="Scan through the input to get the alphabet and to auto select a terminating char that is 1 higher than the max alphabet used in the word list.")
     parser.add_argument("-al", "--alphabet-lookup", action='store_true', help="Preprocess the input and use alphabet lookup table.")
-    parser.add_argument("-max", "--max-alphabet", type=int, default=None, help="Max value of char, dafault to 255. Overriden when alphabet lookup is enabled.")
+    parser.add_argument("-max", "--max-alphabet", type=int, default=None, help="Max value of char, dafault to 255. Overriden when preprocessing or alphabet lookup is enabled.")
     parser.add_argument("-s", "--sort", action='store_true', help="Sort query results alphabetically.")
 
     opt = parser.parse_args()
