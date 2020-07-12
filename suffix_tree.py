@@ -1,7 +1,12 @@
 from highlighter import printHighlight
 from collections import defaultdict
 from tqdm import tqdm
+import functools
 
+def compose(*functions):
+    return functools.reduce(lambda f, g: lambda x: f(g(x)), functions, lambda x: x)
+
+mapl = lambda f,x: list(map(f,x))
 
 class SuffixTreeNode:
 
@@ -14,7 +19,7 @@ class SuffixTreeNode:
             self.wordID = wordID
             self.suffixIndex = suffixIndex
             self.next = nextSuffixOrigin # implemented as linked list
-    
+
     # used so that list[x] becomes list[lookup_table[x]]
     class LookupList:
         def __init__(self, lookup_table):
@@ -37,16 +42,16 @@ class SuffixTreeNode:
         self.alphabetMax = alphabetMax # Max value of alphabet in string. If None, then use defaultdict which is useful for sparse alphabet
         self.alphabetLookup = alphabetLookup # lookup table in the form {ord(char):index}, where 0 <= index < alphabet_size
 
-        # the istart and iend correspond to the first wordID in suffixOrigin, 
+        # the istart and iend correspond to the first wordID in suffixOrigin,
         # so the first should be maintained in head, and append the rest to the tail
         self._lastSuffixOrigin = self.suffixOrigin # NOTE: GST extension # tail of linked list
 
         self._childlist = [] # stores usable index in children for faster iteration
-            
-        # Only applicable to leaf node, 
+
+        # Only applicable to leaf node,
         # Which means that suffix is settled,
         #   and will always remain as leaf node
-        # self.suffixIndex = suffixIndex 
+        # self.suffixIndex = suffixIndex
 
         # Only allocate memory to store children if not leaf, because A LEAF IS ALWAYS A LEAF
         if not isLeaf:
@@ -67,7 +72,7 @@ class SuffixTreeNode:
         return self.getChild(char) is not None
     def getEdgeSize(self):
         return self.iend - self.istart + 1
-    
+
     # to record the wordID and suffixIndex of the word that the current suffix belongs to in the leaf
     def addSuffixOrigin(self, wordID, suffixIndex): # NOTE: GST extension
         if not self.isLeaf():
@@ -84,13 +89,13 @@ class SuffixTreeNode:
             return None
         else:
             return self.children[ord(char)]
-    
+
     def setChild(self, char, newChild):
         if not self.isLeaf():
             if self.children[ord(char)] is None:
                 self._childlist.append(ord(char)) # based on the idea that child will only get added, never deleted
             self.children[ord(char)] = newChild
-    
+
     def getChildren(self):
         return map(lambda x:self.children[x], self._childlist)
         # return filter(lambda x:x is not None, self.children)
@@ -114,14 +119,78 @@ class GeneralizedSuffixTree:
         convertCase = (lambda s:s) if case_sensitive else (lambda s:s.lower())
         self.preprocess = lambda s: convertCase(appendTermChar(s))
 
-        self.wordList = list(map(self.preprocess, wordList))
+        self.wordList = mapl(self.preprocess, wordList)
         self.termChar = termChar
         self.root = SuffixTreeNode(alphabetMax=self.alphabetMax, alphabetLookup=alphabetLookup)
         self.root.link = self.root # root link to itself
         for word_index in tqdm(range(len(self.wordList))):
             self._add(word_index)
             # print(self.wordList[word_index])
-        
+
+    def _getMatch(self, startNode, result_accumulator):
+        def traverse(currNode):
+            if currNode.isLeaf():
+                suffixOrigin = currNode.suffixOrigin
+                while suffixOrigin is not None: # multiple words can have the same suffix, so need to loop through all
+                    wordID = suffixOrigin.wordID
+                    suffixIndex = suffixOrigin.suffixIndex
+                    if wordID not in result_accumulator or suffixIndex < result_accumulator[wordID]:
+                        result_accumulator[wordID] = suffixIndex
+                    suffixOrigin = suffixOrigin.next
+            else:
+                for childNode in currNode.getChildren():
+                    traverse(childNode) # assignment to result is unnecessary
+        traverse(startNode)
+        return result_accumulator
+
+    def match(self, pattern, ret_match_index=False):
+        """
+        Match the substring pattern with all words in the Generalized Suffix Tree
+        @param pattern: substring pattern to match the words in the tree
+        @param ret_match_index: Whether the output should include the starting index
+                of each word that matches the pattern
+        @return: list of words that contains the pattern substring in the tree:
+                either [word,...], or [(word, match_index),...]
+
+        Phase 1: traverse to node corresponding to the pattern
+        Phase 2: search all leaves from that node recursively to get match
+        """
+        if pattern == "" or pattern == self.termChar:
+            return []
+
+        ### Phase 1 ###
+        currNode = self.root
+        pWordList = self.wordList # preprocessed word list by GST
+        i = 0
+        while i < len(pattern):
+            c = pattern[i]
+            if currNode.hasChild(c):
+                currNode = currNode.getChild(c)
+                edgeSize = currNode.getEdgeSize()
+                wordID = currNode.suffixOrigin.wordID
+                istart = currNode.istart
+
+                cmplen = min(len(pattern) - i, edgeSize) # comparison length
+                for k in range(cmplen):
+                    if pattern[i+k] != pWordList[wordID][istart+k]:
+                        return []
+                i += cmplen
+            else:
+                return [] # no match
+
+        ### Phase 2 ###
+        result_dict = {}
+        self._getMatch(currNode, result_dict)
+
+        out_format = lambda x:x if ret_match_index else lambda x:x[0]
+        mapfst = lambda f: lambda x:(f(x[0]), x[1])
+        id2word = lambda i:self.wordList[i][:-1] # ignore the term char
+
+        postprocess = compose(out_format, mapfst(id2word))
+
+        # convert wordID to word from wordList, while retaining the suffixIndex
+        return mapl(postprocess, result_dict.items())
+
     def createLeaf(self, wordID, sourceNode, istart, suffixIndex, firstChar):
         """
         Create a leaf braching from sourceNode, with end index set to the last index of the string because
@@ -131,7 +200,7 @@ class GeneralizedSuffixTree:
         @param suffixIndex: the suffix index represented by this leaf
         """
         lastIndex = len(self.wordList[wordID]) - 1
-        leaf = SuffixTreeNode(wordID, istart, lastIndex, True, suffixIndex, 
+        leaf = SuffixTreeNode(wordID, istart, lastIndex, True, suffixIndex,
                                 alphabetMax=self.alphabetMax, alphabetLookup=self.alphabetLookup)
         sourceNode.setChild(firstChar, leaf)
         return leaf
@@ -150,7 +219,7 @@ class GeneralizedSuffixTree:
         existingWord = self.wordList[currNode.suffixOrigin.wordID]
 
         # create the 2 new nodes
-        internalNode = SuffixTreeNode(currNode.suffixOrigin.wordID, currNode.istart, currNode.istart + goodCount - 1, 
+        internalNode = SuffixTreeNode(currNode.suffixOrigin.wordID, currNode.istart, currNode.istart + goodCount - 1,
                                         alphabetMax=self.alphabetMax, alphabetLookup=self.alphabetLookup)
         newLeaf = self.createLeaf(wordID, internalNode, conflictIndex, suffixIndex, currWord[conflictIndex])
 
@@ -166,14 +235,14 @@ class GeneralizedSuffixTree:
     def walkDown(self, startNode, iend, skipCount, wordID):
         """
         Walk down from startNode and skip skipCount number of chars until the EDGE that can fit the requirement is reached.
-        if skipCount > 0, then the current node will traverse to its child, 
+        if skipCount > 0, then the current node will traverse to its child,
         and parentNode will definitely be updated into non-None value.
         So if skipCount is 0, then there is no need to traverse to its child.
 
         NOTE: skipCount excludes the char introduced in the current phase.
         @return currNode: current node after skip
         @return parentNode: not none if traversal to child has happened
-        @return remainingSkip: remaining skip available after reaching the destination edge 
+        @return remainingSkip: remaining skip available after reaching the destination edge
         """
         currWord = self.wordList[wordID]
 
@@ -189,7 +258,7 @@ class GeneralizedSuffixTree:
             childNode = currNode.getChild(currWord[istart])
 
             childLength = childNode.getEdgeSize() # edge length
-            
+
             # traverse down
             parentNode = currNode
             currNode = childNode
@@ -199,10 +268,17 @@ class GeneralizedSuffixTree:
 
             istart += childLength
             remainingSkip -= childLength
-        
+
         return currNode, parentNode, remainingSkip
-        
-    # TODO: implement manual addition of new words to the GST
+
+    def add(self, word):
+        """
+        !NOTE: Not working when using alphabet lookup table or with max alphabet list
+        """
+        word = self.preprocess(word)
+        self.wordList.append(word)
+        wordID = len(self.wordList) - 1
+        self._add(wordID)
 
     def _add(self, wordID):
         """
@@ -218,20 +294,20 @@ class GeneralizedSuffixTree:
         # newly created internal node, which obviously has no outgoing link,
         # and is awaiting to be linked up in the following extension of its creation
         nodeToLink = None
-        
+
         currNode = self.root
         skipCount = 0
 
         nextSkipCount = 0
 
         # phase iend
-        for iend in range(n): 
+        for iend in range(n):
 
             # extension istart
-            while istart <= iend: 
+            while istart <= iend:
                 if self.print_progress:
                     printHighlight(self.wordList[wordID], istart, iend+1)
-                
+
                 suffixIndex = istart # for readability
 
                 if currNode.isRoot():
@@ -276,16 +352,16 @@ class GeneralizedSuffixTree:
                         # CASE 2: current node is terminating node
                         termNode = currNode # terminating node contains terminating char
                         termNode.addSuffixOrigin(wordID, suffixIndex)
-                        nextSkipCount = termNode.getEdgeSize() - 1 # -1 to exlude the terminating char, as if split with term char happened 
+                        nextSkipCount = termNode.getEdgeSize() - 1 # -1 to exlude the terminating char, as if split with term char happened
                     else:
                         nextSkipCount = remainingSkip + 1 # RULE 3
 
                     #   If nothing is done due to RULE 3, then go back to its parent
                     ##
-                    # HOWEVER if branching (splitting) has happened, then the new internal node 
+                    # HOWEVER if branching (splitting) has happened, then the new internal node
                     #   has no outgoing link, so might as well walking up ONE edge, which is its parent node
                     #   that definitely has a link since it must have linked up in the following extension
-                    #   after it has been created 
+                    #   after it has been created
                     currNode = parentNode # this allows us to guarantee linkableNode has link
 
                 if nodeToLink:
@@ -313,4 +389,3 @@ def getAlphabetTable(wordList):
     table = dict(zip(sorted(alphaUsed), range(len(alphaUsed))))
     #print("Alphabet size:", len(alphaUsed), table)
     return table, termChar
-    
